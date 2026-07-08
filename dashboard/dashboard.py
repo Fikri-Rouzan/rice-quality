@@ -65,7 +65,7 @@ model = load_deep_learning_model()
 
 # Sidebar panel kontrol
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/512/rice-bowl.png", width=120)
+    st.image("image/icon.png", width=120)
     st.title("Ricelytics")
     st.markdown("---")
 
@@ -155,41 +155,55 @@ with tab1:
             total_pixels = TARGET_SIZE[0] * TARGET_SIZE[1]
             object_ratio = (white_pixels / total_pixels) * 100
 
-            # Deteksi struktur pembatas menggunakan Kontur Bounding Box
+            # Hitung properti geometri kontur
             contours, _ = cv2.findContours(
                 gray_processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
-            touches_border = False
+
+            is_valid_rice = False
+            solidity_score = 0.0
+            aspect_ratio_score = 0.0
 
             if contours:
-                # Ambil kontur terbesar
+                # Ambil kontur terbesar objek utama
                 largest_contour = max(contours, key=cv2.contourArea)
-                x, y, w, h = cv2.boundingRect(largest_contour)
+                area = cv2.contourArea(largest_contour)
 
-                # Cek jika koordinat kotak pelindung menyentuh piksel tepi luar
-                if (
-                    x <= 2
-                    or y <= 2
-                    or (x + w) >= (TARGET_SIZE[0] - 2)
-                    or (y + h) >= (TARGET_SIZE[1] - 2)
-                ):
-                    touches_border = True
+                # Hitung kepadatan bentuk
+                hull = cv2.convexHull(largest_contour)
+                hull_area = cv2.contourArea(hull)
+                solidity_score = float(area) / hull_area if hull_area > 0 else 0
 
-            # Evaluasi keputusan
-            if object_ratio < 2.0 or object_ratio > 40.0 or touches_border:
-                st.error("🚨 **ERROR: Invalid Object Detected!**")
-                if touches_border:
-                    st.write(
-                        "**Deteksi Celah Keamanan:** Objek asing terdeteksi memotong atau menyentuh garis pembatas tepi kamera. "
-                        "Silakan posisikan ulang butir beras secara mandiri tepat di tengah frame tanpa menyentuh sudut kamera."
-                    )
+                # Hitung aspect ratio untuk menghindari bias kemiringan
+                rect = cv2.minAreaRect(largest_contour)
+                _, (w_rect, h_rect), _ = rect
+                if w_rect > 0 and h_rect > 0:
+                    aspect_ratio_score = max(w_rect, h_rect) / min(w_rect, h_rect)
                 else:
-                    st.write(
-                        f"Karakteristik dimensi objek tidak sesuai dengan standar geometri butir beras tunggal "
-                        f"(Rasio area aktif: {object_ratio:.2f}%)."
-                    )
+                    aspect_ratio_score = 1.0
+
+                # Parameter ambang batas geometri
+                if (
+                    (object_ratio >= 1.0 and object_ratio <= 50.0)
+                    and (solidity_score > 0.80)
+                    and (aspect_ratio_score > 1.15)
+                ):
+                    is_valid_rice = True
+
+            # Validasi akhir
+            if not is_valid_rice:
+                st.error("🚨 **ERROR: Invalid Object Detected!**")
+                st.write(
+                    "Karakteristik morfologi objek tidak memenuhi standar geometri butir "
+                    "beras yang valid. Sistem mendeteksi ini sebagai objek asing."
+                )
+                st.info(
+                    f"**Hasil Analisis Geometri:** \n"
+                    f"- Rasio Kepadatan Area: {object_ratio:.2f}% (Standar: 1.0% - 50.0%)\n"
+                    f"- Skor Solidity: {solidity_score:.2f} (Standar: > 0.80)\n"
+                    f"- Aspect Ratio: {aspect_ratio_score:.2f} (Standar: > 1.15)"
+                )
             else:
-                # Proses inferensi
                 with st.spinner(
                     "Model MobileNetV2 sedang menganalisis karakteristik piksel..."
                 ):
