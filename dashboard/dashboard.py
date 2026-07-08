@@ -140,7 +140,7 @@ with tab1:
         with col2:
             st.image(
                 processed_img,
-                caption="Hasil Segmentasi Latar Belakang Hitam Absolut",
+                caption="Hasil Segmentasi",
                 width="stretch",
             )
 
