@@ -44,13 +44,15 @@ def enhance_image(image):
 
 
 def preprocess_grain_image(image, target_size=(224, 224)):
-    # Segmentasi latar belakang hitam absolut via HSV + Otsu & Resizing
+    # Segmentasi latar belakang hitam absolut via Dynamic Max-Relative Thresholding
     hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     v_channel = hsv_image[:, :, 2]
 
-    _, binary_mask = cv2.threshold(
-        v_channel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+    # Menghitung nilai ambang batas adaptif 35% dari tingkat kecerahan puncak
+    max_v = np.max(v_channel) if np.max(v_channel) > 0 else 1
+    dynamic_thresh = max(int(max_v * 0.35), 50)
+
+    _, binary_mask = cv2.threshold(v_channel, dynamic_thresh, 255, cv2.THRESH_BINARY)
     segmented_image = cv2.bitwise_and(image, image, mask=binary_mask)
     resized_image = cv2.resize(
         segmented_image, target_size, interpolation=cv2.INTER_AREA
@@ -81,7 +83,7 @@ with st.sidebar:
 # Header dashboard
 st.title("Ricelytics: Rice Quality Assessment")
 st.markdown(
-    "Menampilkan insight segmentasi citra digital dan klasifikasi kualitas beras secara real-time."
+    "Menampilkan insight segmentasi citra digital dan klasifikasi kualitas beras."
 )
 st.markdown("---")
 
@@ -93,7 +95,7 @@ with tab1:
     with st.container(border=True):
         st.subheader("Pengaturan Masukan Citra")
         st.markdown(
-            "Pilih metode pengambilan atau unggahan foto butir beras di bawah ini:"
+            "Pilih metode pengambilan atau upload foto butir beras di bawah ini:"
         )
 
         input_method = st.radio(
@@ -110,176 +112,238 @@ with tab1:
     uploaded_file = None
     if input_method == "Upload File Foto":
         uploaded_file = st.file_uploader(
-            "Unggah foto butir beras (.jpg, .jpeg, .png)", type=["jpg", "jpeg", "png"]
+            "Upload foto butir beras (.jpg, .jpeg, .png)", type=["jpg", "jpeg", "png"]
         )
     else:
         uploaded_file = st.camera_input(
             "Posisikan objek beras tepat di tengah area kamera"
         )
 
-    # Alur eksekusi pengkondisian citra & inferensi model
+    # Alur eksekusi pengkondisian citra & inferensi model objek
     if uploaded_file is not None:
         pil_image = Image.open(uploaded_file)
         img_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-        # Pemrosesan gambar berurutan
-        with st.spinner("Menjalankan preprocessing citra..."):
+        # Pemrosesan gambar sekuensial penuh pada resolusi asli
+        with st.spinner("Menjalankan preprocessing dan lokalisasi objek..."):
             enhanced_img = enhance_image(img_bgr)
-            processed_img = preprocess_grain_image(
-                enhanced_img, target_size=TARGET_SIZE
+
+            # Segmentasi penuh untuk memisahkan latar belakang secara global
+            hsv_image = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2HSV)
+            v_channel = hsv_image[:, :, 2]
+
+            # Sinkronisasi parameter binarisasi
+            max_v_main = np.max(v_channel) if np.max(v_channel) > 0 else 1
+            dynamic_thresh_main = max(int(max_v_main * 0.35), 50)
+
+            _, binary_mask = cv2.threshold(
+                v_channel, dynamic_thresh_main, 255, cv2.THRESH_BINARY
             )
 
-        # Hasil visual preprocessing
-        st.write("")
-        st.subheader("🖼️ Analisis Komparasi Citra Digital")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.image(pil_image, caption="Gambar Input Asli", width="stretch")
-
-        with col2:
-            st.image(
-                processed_img,
-                caption="Hasil Segmentasi",
-                width="stretch",
-            )
-
-        # Proses klasifikasi
-        if model is not None:
-            st.markdown("---")
-            st.subheader("📊 Hasil Analisis Klasifikasi Kualitas")
-
-            # Hitung rasio kepadatan piksel objek
-            gray_processed = cv2.cvtColor(processed_img, cv2.COLOR_RGB2GRAY)
-            white_pixels = cv2.countNonZero(gray_processed)
-            total_pixels = TARGET_SIZE[0] * TARGET_SIZE[1]
-            object_ratio = (white_pixels / total_pixels) * 100
-
-            # Hitung properti geometri kontur
+            # Menemukan seluruh kontur independen butir beras di dalam gambar
             contours, _ = cv2.findContours(
-                gray_processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
 
-            is_valid_rice = False
-            solidity_score = 0.0
-            aspect_ratio_score = 0.0
+        st.write("")
+        st.subheader("🖼️ Analisis Komparasi Dan Hasil Deteksi")
 
+        # Inisialisasi variabel penghitung dan penanda objek beras
+        grain_counts = {"whole": 0, "chalky": 0, "broken": 0, "discolored": 0}
+        detected_any_rice = False
+
+        # Proses ekstraksi, pembersihan latar belakang, dan inferensi model
+        if model is not None:
             if contours:
-                # Ambil kontur terbesar objek utama
-                largest_contour = max(contours, key=cv2.contourArea)
-                area = cv2.contourArea(largest_contour)
+                # Mencari kontur terbesar di layar sebagai acuan skala relatif
+                largest_contour_main = max(contours, key=cv2.contourArea)
+                max_grain_area = cv2.contourArea(largest_contour_main)
 
-                # Hitung kepadatan bentuk
-                hull = cv2.convexHull(largest_contour)
-                hull_area = cv2.contourArea(hull)
-                solidity_score = float(area) / hull_area if hull_area > 0 else 0
+                # Pembuatan masker murni untuk melibas bintik noise
+                clean_full_mask = np.zeros_like(binary_mask)
+                valid_grains_data = []
 
-                # Hitung aspect ratio untuk menghindari bias kemiringan
-                rect = cv2.minAreaRect(largest_contour)
-                _, (w_rect, h_rect), _ = rect
-                if w_rect > 0 and h_rect > 0:
-                    aspect_ratio_score = max(w_rect, h_rect) / min(w_rect, h_rect)
-                else:
-                    aspect_ratio_score = 1.0
+                # Tahap filter 1 untuk validasi kontur morfologi beras
+                for idx, c in enumerate(contours):
+                    area = cv2.contourArea(c)
 
-                # Parameter ambang batas geometri
-                if (
-                    (object_ratio >= 1.0 and object_ratio <= 50.0)
-                    and (solidity_score > 0.80)
-                    and (aspect_ratio_score > 1.15)
-                ):
-                    is_valid_rice = True
+                    # Filter dimensi dasar geometri beras
+                    if area < 100:
+                        continue
+                    if area < (max_grain_area * 0.10):
+                        continue
+                    hull = cv2.convexHull(c)
+                    hull_area = cv2.contourArea(hull)
+                    solidity_score = float(area) / hull_area if hull_area > 0 else 0
+                    if solidity_score < 0.75:
+                        continue
 
-            # Validasi akhir
-            if not is_valid_rice:
-                st.error("🚨 **ERROR: Invalid Object Detected!**")
-                st.write(
-                    "Karakteristik morfologi objek tidak memenuhi standar geometri butir "
-                    "beras yang valid. Sistem mendeteksi ini sebagai objek asing."
+                    x, y, w, h = cv2.boundingRect(c)
+                    aspect_ratio_score = max(w, h) / min(w, h) if min(w, h) > 0 else 1.0
+                    if aspect_ratio_score < 1.10:
+                        continue
+
+                    # Objek dinyatakan lolos sebagai komponen beras valid
+                    detected_any_rice = True
+                    cv2.drawContours(
+                        clean_full_mask, [c], -1, 255, thickness=cv2.FILLED
+                    )
+                    valid_grains_data.append((x, y, w, h))
+
+                # Terapkan masker bersih untuk menghasilkan citra segmentasi bebas bintik noise
+                segmented_clean_bgr = cv2.bitwise_and(
+                    img_bgr, img_bgr, mask=clean_full_mask
                 )
-                st.info(
-                    f"**Hasil Analisis Geometri:** \n"
-                    f"- Rasio Kepadatan Area: {object_ratio:.2f}% (Standar: 1.0% - 50.0%)\n"
-                    f"- Skor Solidity: {solidity_score:.2f} (Standar: > 0.80)\n"
-                    f"- Aspect Ratio: {aspect_ratio_score:.2f} (Standar: > 1.15)"
-                )
-            else:
-                with st.spinner(
-                    "Model MobileNetV2 sedang menganalisis karakteristik piksel..."
-                ):
-                    normalized_input = processed_img / 255.0
+                img_rgb_annotated = cv2.cvtColor(segmented_clean_bgr, cv2.COLOR_BGR2RGB)
+                segmented_full_rgb = img_rgb_annotated.copy()
+
+                # Tahap filter 2 untuk proses prediksi dengan square padding adaptif
+                for x, y, w, h in valid_grains_data:
+                    # Potong objek bulir beras murni
+                    grain_crop = segmented_clean_bgr[y : y + h, x : x + w]
+
+                    # Membuat kanvas kotak murni 1:1 berdasarkan sisi terpanjang tanpa pengali eksternal
+                    max_side = max(w, h)
+                    grain_square = np.zeros((max_side, max_side, 3), dtype=np.uint8)
+                    df_x = (max_side - w) // 2
+                    df_y = (max_side - h) // 2
+                    grain_square[df_y : df_y + h, df_x : df_x + w] = grain_crop
+
+                    # Resize kanvas kotak proporsional ke skala input model
+                    grain_resized = cv2.resize(
+                        grain_square, TARGET_SIZE, interpolation=cv2.INTER_AREA
+                    )
+                    grain_input_rgb = cv2.cvtColor(grain_resized, cv2.COLOR_BGR2RGB)
+
+                    # Normalisasi dan inferensi model secara terlokalisasi
+                    normalized_input = grain_input_rgb / 255.0
                     input_batch = np.expand_dims(normalized_input, axis=0)
-
                     predictions = model.predict(input_batch, verbose=0)[0]
+
                     predicted_class_idx = np.argmax(predictions)
                     predicted_label = LABELS[predicted_class_idx]
                     confidence_score = predictions[predicted_class_idx] * 100
 
-                # Pengaturan visualisasi output berdasarkan label
-                if predicted_label == "whole":
-                    status_icon = "🌾"
-                    alert_text = "Bulir beras terdeteksi berkondisi **Utuh (Whole)** dengan bentuk morfologi sempurna."
-                    st.success(
-                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    # Memperbarui kamus jumlah batch kualitas beras
+                    grain_counts[predicted_label] += 1
+
+                    # Pemetaan warna kotak pembatas berdasarkan kategori
+                    color_map = {
+                        "whole": (0, 255, 0),
+                        "chalky": (255, 165, 0),
+                        "broken": (255, 0, 0),
+                        "discolored": (255, 255, 0),
+                    }
+                    box_color = color_map[predicted_label]
+
+                    # Mengatur skala font teks label secara dinamis
+                    dynamic_font_scale = max(0.5, img_bgr.shape[1] / 1800.0)
+                    dynamic_thickness = max(1, int(img_bgr.shape[1] / 1000.0))
+
+                    # Kotak pembatas pada citra berlatar belakang hitam
+                    cv2.rectangle(
+                        img_rgb_annotated,
+                        (x, y),
+                        (x + w, y + h),
+                        box_color,
+                        dynamic_thickness + 1,
                     )
-                elif predicted_label == "chalky":
-                    status_icon = "⚪"
-                    alert_text = "Bulir beras terdeteksi mengandung kadar kapur tinggi **(Chalky)**, ditandai warna putih susu."
-                    st.warning(
-                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    label_text = f"{predicted_label.upper()} ({confidence_score:.0f}%)"
+                    cv2.putText(
+                        img_rgb_annotated,
+                        label_text,
+                        (x, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        dynamic_font_scale,
+                        box_color,
+                        dynamic_thickness,
                     )
-                elif predicted_label == "broken":
-                    status_icon = "❌"
-                    alert_text = "Bulir beras terdeteksi mengalami patah fisik **(Broken)** yang signifikan di bawah batas normal."
-                    st.error(
-                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+
+            # Visualisasi di kolom dashboard
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(
+                    pil_image,
+                    caption="Gambar Input Asli",
+                    width="stretch",
+                )
+            with col2:
+                if detected_any_rice:
+                    st.image(
+                        img_rgb_annotated,
+                        caption="Hasil Segmentasi",
+                        width="stretch",
                     )
                 else:
-                    status_icon = "🍂"
-                    alert_text = "Bulir beras mengalami degradasi atau perubahan warna **(Discolored)** akibat pengaruh eksternal."
-                    st.warning(
-                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    st.image(
+                        segmented_full_rgb,
+                        caption="Hasil Segmentasi (Tidak Ada Objek Beras Valid)",
+                        width="stretch",
                     )
 
-                st.write(alert_text)
+            # Statistik kuantitatif kumulatif
+            if detected_any_rice:
+                st.markdown("---")
+                st.subheader("📊 Hasil Analisis Kuantitas Komoditas Beras")
 
-                # Bar chart distribusi probabilitas
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    st.metric(
+                        label="🌾 TOTAL UTUH (WHOLE)", value=grain_counts["whole"]
+                    )
+                with m2:
+                    st.metric(
+                        label="⚪ TOTAL BERKAPUR (CHALKY)",
+                        value=grain_counts["chalky"],
+                    )
+                with m3:
+                    st.metric(
+                        label="❌ TOTAL PATAH (BROKEN)",
+                        value=grain_counts["broken"],
+                    )
+                with m4:
+                    st.metric(
+                        label="🍂 TOTAL BERUBAH WARNA (DISCOLORED)",
+                        value=grain_counts["discolored"],
+                    )
+
+                # Bar chart akumulasi jumlah butir per label
                 st.write("")
-                st.markdown("#### Grafik Distribusi Probabilitas Prediksi:")
+                st.markdown("#### Grafik Akumulasi Distribusi Jumlah Butir Beras:")
+
+                categories = [lbl for lbl in LABELS]
+                total_counts = [grain_counts[lbl] for lbl in LABELS]
 
                 fig = px.bar(
-                    x=[lbl for lbl in LABELS],
-                    y=predictions,
+                    x=categories,
+                    y=total_counts,
                     labels={
-                        "x": "Kategori",
-                        "y": "Probabilitas",
+                        "x": "Kategori Kualitas Beras",
+                        "y": "Jumlah Butir",
                     },
                     color=LABELS,
                     color_discrete_sequence=px.colors.qualitative.Pastel1,
+                    text=total_counts,
                 )
-
+                fig.update_traces(textposition="auto")
                 fig.update_layout(
-                    xaxis=dict(
-                        tickangle=-45,
-                        title_font=dict(size=12),
-                    ),
-                    yaxis=dict(
-                        title_font=dict(size=12),
-                        range=[0, 1],
-                    ),
+                    xaxis=dict(tickangle=-45, title_font=dict(size=12)),
+                    yaxis=dict(title_font=dict(size=12)),
                     showlegend=False,
                     height=380,
                     margin=dict(l=40, r=40, t=20, b=60),
                     template="plotly_white",
                 )
-
                 st.plotly_chart(fig, width="stretch")
-
+            else:
+                st.error(
+                    "🚨 **Validasi Gagal:** Tidak ada objek butir beras yang memenuhi standar kriteria morfologi geometri sistem."
+                )
         else:
             st.error("Proses klasifikasi dihentikan karena model gagal dimuat.")
     else:
         st.info(
-            "Silakan unggah foto beras atau aktifkan modul kamera untuk memulai proses klasifikasi."
+            "Silakan upload foto beras atau aktifkan modul kamera untuk memulai proses klasifikasi."
         )
 
 # Tab 2 untuk panduan parameter
