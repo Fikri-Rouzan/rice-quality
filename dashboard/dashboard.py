@@ -248,7 +248,7 @@ with tab1:
                 st.markdown("#### Grafik Distribusi Probabilitas Prediksi:")
 
                 fig = px.bar(
-                    x=[lbl.upper() for lbl in LABELS],
+                    x=[lbl for lbl in LABELS],
                     y=predictions,
                     labels={
                         "x": "Kategori",
