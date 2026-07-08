@@ -149,77 +149,117 @@ with tab1:
             st.markdown("---")
             st.subheader("📊 Hasil Analisis Klasifikasi Kualitas")
 
-            with st.spinner(
-                "Model MobileNetV2 sedang menganalisis karakteristik piksel..."
-            ):
-                normalized_input = processed_img / 255.0
-                input_batch = np.expand_dims(normalized_input, axis=0)
+            # Hitung rasio kepadatan piksel objek
+            gray_processed = cv2.cvtColor(processed_img, cv2.COLOR_RGB2GRAY)
+            white_pixels = cv2.countNonZero(gray_processed)
+            total_pixels = TARGET_SIZE[0] * TARGET_SIZE[1]
+            object_ratio = (white_pixels / total_pixels) * 100
 
-                # verbose=0 mematikan tulisan log kemajuan di terminal
-                predictions = model.predict(input_batch, verbose=0)[0]
-                predicted_class_idx = np.argmax(predictions)
-                predicted_label = LABELS[predicted_class_idx]
-                confidence_score = predictions[predicted_class_idx] * 100
+            # Deteksi struktur pembatas menggunakan Kontur Bounding Box
+            contours, _ = cv2.findContours(
+                gray_processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            touches_border = False
 
-            # Pengaturan visualisasi output berdasarkan label
-            if predicted_label == "whole":
-                status_icon = "🌾"
-                alert_text = "Bulir beras terdeteksi berkondisi **Utuh (Whole)** dengan bentuk morfologi sempurna."
-                st.success(
-                    f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
-                )
-            elif predicted_label == "chalky":
-                status_icon = "⚪"
-                alert_text = "Bulir beras terdeteksi mengandung kadar kapur tinggi **(Chalky)**, ditandai warna putih susu."
-                st.warning(
-                    f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
-                )
-            elif predicted_label == "broken":
-                status_icon = "❌"
-                alert_text = "Bulir beras terdeteksi mengalami patah fisik **(Broken)** yang signifikan di bawah batas normal."
-                st.error(
-                    f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
-                )
+            if contours:
+                # Ambil kontur terbesar
+                largest_contour = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(largest_contour)
+
+                # Cek jika koordinat kotak pelindung menyentuh piksel tepi luar
+                if (
+                    x <= 2
+                    or y <= 2
+                    or (x + w) >= (TARGET_SIZE[0] - 2)
+                    or (y + h) >= (TARGET_SIZE[1] - 2)
+                ):
+                    touches_border = True
+
+            # Evaluasi keputusan
+            if object_ratio < 2.0 or object_ratio > 40.0 or touches_border:
+                st.error("🚨 **ERROR: Invalid Object Detected!**")
+                if touches_border:
+                    st.write(
+                        "**Deteksi Celah Keamanan:** Objek asing terdeteksi memotong atau menyentuh garis pembatas tepi kamera. "
+                        "Silakan posisikan ulang butir beras secara mandiri tepat di tengah frame tanpa menyentuh sudut kamera."
+                    )
+                else:
+                    st.write(
+                        f"Karakteristik dimensi objek tidak sesuai dengan standar geometri butir beras tunggal "
+                        f"(Rasio area aktif: {object_ratio:.2f}%)."
+                    )
             else:
-                status_icon = "🍂"
-                alert_text = "Bulir beras mengalami degradasi atau perubahan warna **(Discolored)** akibat pengaruh eksternal."
-                st.warning(
-                    f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                # Proses inferensi
+                with st.spinner(
+                    "Model MobileNetV2 sedang menganalisis karakteristik piksel..."
+                ):
+                    normalized_input = processed_img / 255.0
+                    input_batch = np.expand_dims(normalized_input, axis=0)
+
+                    predictions = model.predict(input_batch, verbose=0)[0]
+                    predicted_class_idx = np.argmax(predictions)
+                    predicted_label = LABELS[predicted_class_idx]
+                    confidence_score = predictions[predicted_class_idx] * 100
+
+                # Pengaturan visualisasi output berdasarkan label
+                if predicted_label == "whole":
+                    status_icon = "🌾"
+                    alert_text = "Bulir beras terdeteksi berkondisi **Utuh (Whole)** dengan bentuk morfologi sempurna."
+                    st.success(
+                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    )
+                elif predicted_label == "chalky":
+                    status_icon = "⚪"
+                    alert_text = "Bulir beras terdeteksi mengandung kadar kapur tinggi **(Chalky)**, ditandai warna putih susu."
+                    st.warning(
+                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    )
+                elif predicted_label == "broken":
+                    status_icon = "❌"
+                    alert_text = "Bulir beras terdeteksi mengalami patah fisik **(Broken)** yang signifikan di bawah batas normal."
+                    st.error(
+                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    )
+                else:
+                    status_icon = "🍂"
+                    alert_text = "Bulir beras mengalami degradasi atau perubahan warna **(Discolored)** akibat pengaruh eksternal."
+                    st.warning(
+                        f"### {status_icon} KATEGORI: {predicted_label.upper()} ({confidence_score:.2f}%)"
+                    )
+
+                st.write(alert_text)
+
+                # Bar chart distribusi probabilitas
+                st.write("")
+                st.markdown("#### Grafik Distribusi Probabilitas Prediksi:")
+
+                fig = px.bar(
+                    x=[lbl.upper() for lbl in LABELS],
+                    y=predictions,
+                    labels={
+                        "x": "Kategori",
+                        "y": "Probabilitas",
+                    },
+                    color=LABELS,
+                    color_discrete_sequence=px.colors.qualitative.Pastel1,
                 )
 
-            st.write(alert_text)
+                fig.update_layout(
+                    xaxis=dict(
+                        tickangle=-45,
+                        title_font=dict(size=12),
+                    ),
+                    yaxis=dict(
+                        title_font=dict(size=12),
+                        range=[0, 1],
+                    ),
+                    showlegend=False,
+                    height=380,
+                    margin=dict(l=40, r=40, t=20, b=60),
+                    template="plotly_white",
+                )
 
-            # Bar chart distribusi probabilitas
-            st.write("")
-            st.markdown("#### Grafik Distribusi Probabilitas Prediksi:")
-
-            fig = px.bar(
-                x=[lbl for lbl in LABELS],
-                y=predictions,
-                labels={
-                    "x": "Kategori",
-                    "y": "Probabilitas",
-                },
-                color=LABELS,
-                color_discrete_sequence=px.colors.qualitative.Pastel1,
-            )
-
-            fig.update_layout(
-                xaxis=dict(
-                    tickangle=-45,
-                    title_font=dict(size=12),
-                ),
-                yaxis=dict(
-                    title_font=dict(size=12),
-                    range=[0, 1],
-                ),
-                showlegend=False,
-                height=380,
-                margin=dict(l=40, r=40, t=20, b=60),
-                template="plotly_white",
-            )
-
-            st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, width="stretch")
 
         else:
             st.error("Proses klasifikasi dihentikan karena model gagal dimuat.")
