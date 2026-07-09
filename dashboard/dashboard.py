@@ -1,6 +1,6 @@
 import os
 
-# Membungkam log spam compiler dari TensorFlow
+# Mengabaikan log spam compiler dari TensorFlow
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
@@ -48,7 +48,7 @@ def preprocess_grain_image(image, target_size=(224, 224)):
     hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     v_channel = hsv_image[:, :, 2]
 
-    # Menghitung nilai ambang batas adaptif 35% dari tingkat kecerahan puncak
+    # Menghitung nilai ambang batas adaptif dari tingkat kecerahan puncak
     max_v = np.max(v_channel) if np.max(v_channel) > 0 else 1
     dynamic_thresh = max(int(max_v * 0.35), 50)
 
@@ -159,7 +159,7 @@ with tab1:
                 largest_contour_main = max(contours, key=cv2.contourArea)
                 max_grain_area = cv2.contourArea(largest_contour_main)
 
-                # Pembuatan masker murni untuk melibas bintik noise
+                # Pembuatan mask murni
                 clean_full_mask = np.zeros_like(binary_mask)
                 valid_grains_data = []
 
@@ -190,7 +190,7 @@ with tab1:
                     )
                     valid_grains_data.append((x, y, w, h))
 
-                # Terapkan masker bersih untuk menghasilkan citra segmentasi bebas bintik noise
+                # Terapkan mask untuk menghasilkan citra segmentasi bebas noise
                 segmented_clean_bgr = cv2.bitwise_and(
                     img_bgr, img_bgr, mask=clean_full_mask
                 )
@@ -202,7 +202,7 @@ with tab1:
                     # Potong objek bulir beras murni
                     grain_crop = segmented_clean_bgr[y : y + h, x : x + w]
 
-                    # Membuat kanvas kotak murni 1:1 berdasarkan sisi terpanjang tanpa pengali eksternal
+                    # Membuat kanvas kotak murni 1:1 berdasarkan sisi terpanjang
                     max_side = max(w, h)
                     grain_square = np.zeros((max_side, max_side, 3), dtype=np.uint8)
                     df_x = (max_side - w) // 2
@@ -377,6 +377,6 @@ with tab2:
         - **Indikator**: Kerusakan akibat aktivitas mikroba (jamur), kelembapan box penyimpanan yang buruk, atau efek panas berlebih sebelum proses pengeringan.
         """)
 
-# Footer dashboard
+# Footer
 st.markdown("---")
 st.caption("© 2026 Ricelytics")
