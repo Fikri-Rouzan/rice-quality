@@ -289,8 +289,7 @@ with tab1:
                 # Menghitung total jumlah butir beras dari semua kategori
                 total_grains = sum(grain_counts.values())
 
-                st.markdown(f"🎯 **Total Seluruh Beras:** `{total_grains}`")
-                st.write("")
+                st.markdown(f"🎯 **TOTAL SELURUH BERAS:** `{total_grains}`")
 
                 m1, m2, m3, m4 = st.columns(4)
                 with m1:
