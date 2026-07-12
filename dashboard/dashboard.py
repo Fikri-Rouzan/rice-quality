@@ -237,8 +237,8 @@ with tab1:
                     box_color = color_map[predicted_label]
 
                     # Mengatur skala font teks label secara dinamis
-                    dynamic_font_scale = max(0.5, img_bgr.shape[1] / 1800.0)
-                    dynamic_thickness = max(1, int(img_bgr.shape[1] / 1000.0))
+                    dynamic_font_scale = max(0.35, img_bgr.shape[1] / 3200.0)
+                    dynamic_thickness = max(1, int(img_bgr.shape[1] / 2200.0))
 
                     # Kotak pembatas pada citra berlatar belakang hitam
                     cv2.rectangle(
