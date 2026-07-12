@@ -286,6 +286,12 @@ with tab1:
                 st.markdown("---")
                 st.subheader("📊 Hasil Analisis Kuantitas Komoditas Beras")
 
+                # Menghitung total jumlah butir beras dari semua kategori
+                total_grains = sum(grain_counts.values())
+
+                st.markdown(f"🎯 **Total Seluruh Beras:** `{total_grains}`")
+                st.write("")
+
                 m1, m2, m3, m4 = st.columns(4)
                 with m1:
                     st.metric(
